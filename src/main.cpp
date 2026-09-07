@@ -1,10 +1,12 @@
-﻿#include <Arduino.h>
+#include <Arduino.h>
 #include "systemConfig.h"
-// Check the central profile before any future hardware initialization.
+
+// Comprueba el perfil central antes de cualquier futura inicialización del hardware.
 void setup() {
-    const validationResult result = validateProfile(defaultConfig);
+    const profileValidator validator{};
+    const validationResult result = validator.validate(defaultConfig);
     if (result.error != configError::none) return;
 }
-// Leave hardware inactive until the acquisition story is implemented.
-void loop() {}
 
+// Mantiene el hardware inactivo hasta implementar la adquisición.
+void loop() {}

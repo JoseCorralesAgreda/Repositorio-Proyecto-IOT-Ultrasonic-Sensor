@@ -1,4 +1,4 @@
-﻿param([string]$compilerSetup = '')
+param([string]$compilerSetup = '')
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 if (-not $compilerSetup) {
@@ -16,6 +16,7 @@ New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
 $batchPath = Join-Path $buildRoot 'run.cmd'
 $batchLines = @(
     '@echo off',
+    'chcp 65001 >nul',
     ('call "{0}" >nul' -f $compilerSetup),
     'if errorlevel 1 exit /b 1',
     ('cd /d "{0}"' -f $buildRoot),
@@ -24,6 +25,6 @@ $batchLines = @(
     'systemConfigTest.exe',
     'exit /b %errorlevel%'
 )
-$batchLines | Set-Content -LiteralPath $batchPath -Encoding ascii
+[System.IO.File]::WriteAllLines($batchPath, $batchLines, [System.Text.UTF8Encoding]::new($false))
 & cmd.exe /d /c "`"$batchPath`""
 exit $LASTEXITCODE

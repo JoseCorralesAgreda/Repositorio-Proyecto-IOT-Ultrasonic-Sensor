@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <cstdint>
 inline constexpr std::uint32_t medianFilterSize = 3;
 inline constexpr std::uint32_t sampleCapacity = 9;
@@ -48,7 +48,16 @@ struct validationResult {
     double responseBoundMs{0.0};
 };
 extern const systemConfig defaultConfig;
-// Validate a profile without hardware, allocation, or mutable global state.
-validationResult validateProfile(const systemConfig& profile);
+// Comprueba el perfil sin hardware, asignaciones ni estado mutable.
+class profileValidator {
+public:
+    validationResult validate(const systemConfig& profile) const;
 
-
+private:
+    bool inRange(double value, double minimum, double maximum) const;
+    configError validateMeasurement(const systemConfig& profile) const;
+    bool validThresholds(const systemConfig& profile) const;
+    configError validateBehavior(const systemConfig& profile) const;
+    bool validPin(std::int32_t pin, bool output) const;
+    bool validPins(const systemConfig& profile) const;
+};

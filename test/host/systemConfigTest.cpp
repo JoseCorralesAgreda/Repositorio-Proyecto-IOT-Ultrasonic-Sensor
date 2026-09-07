@@ -1,23 +1,26 @@
-﻿#include "systemConfig.h"
+#include "systemConfig.h"
 #include <cmath>
 #include <iostream>
 #include <limits>
 
 struct testState { unsigned checks{0}; unsigned failures{0}; };
-// Record an explicit check even when NDEBUG is enabled.
+// Registra cada comprobación incluso cuando NDEBUG está definido.
 void expect(testState& state, bool condition, const char* name) {
     ++state.checks;
     if (!condition) { ++state.failures; std::cerr << "FAIL: " << name << '\n'; }
 }
-// Exercise one field on a fresh production profile.
+// Prueba un campo sobre una copia nueva del perfil de producción.
 template<typename valueType, typename inputType>
 void field(testState& state, valueType systemConfig::*member, inputType value,
            configError expected, const char* name) {
     systemConfig p{defaultConfig};
     p.*member = static_cast<valueType>(value);
-    expect(state, validateProfile(p).error == expected, name);
+    const validationResult result{profileValidator{}.validate(p)};
+    expect(state, result.error == expected, name);
+    if (expected != configError::none && expected != configError::responseBound)
+        expect(state, result.responseBoundMs == 0.0, "early error bound zero");
 }
-// Cover integer endpoints, adjacent failures, and extreme inputs.
+// Cubre límites enteros, errores adyacentes y entradas extremas.
 void integers(testState& s) {
     struct rangeCase { std::uint32_t systemConfig::*member; std::uint32_t low;
         std::uint32_t high; configError error; const char* name; };
@@ -37,7 +40,7 @@ void integers(testState& s) {
         field(s,c.member,std::numeric_limits<std::uint32_t>::max(),c.error,c.name);
     }
 }
-// Cover finite ranges and nonfinite values for every floating-point field.
+// Cubre rangos finitos y valores no finitos de todos los campos flotantes.
 void floating(testState& s) {
     struct rangeCase { float systemConfig::*member; float low; float high;
         configError error; const char* name; };
@@ -73,7 +76,7 @@ void floating(testState& s) {
     field(s,&systemConfig::distanceOffsetCm,-5.01F,configError::correction,"offset below");
     field(s,&systemConfig::distanceOffsetCm,5.01F,configError::correction,"offset above");
 }
-// Reject all adjacent threshold equalities and inversions.
+// Rechaza igualdades e inversiones entre umbrales adyacentes.
 void ordering(testState& s) {
 
 
@@ -97,55 +100,124 @@ void ordering(testState& s) {
     field(s,rates[1],4.0F,configError::frequency,"medium high equal");
     field(s,rates[1],4.5F,configError::frequency,"medium high inversion");
 }
-// Exercise pin roles, duplicates, unavailable pins, and input-only GPIOs.
+// Prueba roles, duplicados, pines no disponibles y GPIO de entrada exclusiva.
 void pins(testState& s) {
     std::int32_t systemConfig::*members[]{&systemConfig::triggerPin,&systemConfig::echoPin,
         &systemConfig::stationaryLedPin,&systemConfig::approachingLedPin,&systemConfig::recedingLedPin};
-    const std::int32_t invalid[]{-1,0,2,5,6,7,8,9,10,11,12,15,20,24,28,29,30,31,40,
+    const std::int32_t invalid[]{-1,0,2,5,6,7,8,9,10,11,12,15,20,24,28,29,30,31,37,38,40,
         std::numeric_limits<std::int32_t>::min(),std::numeric_limits<std::int32_t>::max()};
     for (unsigned i=0;i<5;++i) {
         for (auto pin : invalid) field(s,members[i],pin,configError::gpio,"invalid GPIO");
         for (std::int32_t pin=34;pin<=39;++pin)
-            field(s,members[i],pin,i==1?configError::none:configError::gpio,"input-only GPIO");
+            field(s,members[i],pin,i==1 && pin!=37 && pin!=38 ? configError::none : configError::gpio,"input-only GPIO");
         for (unsigned j=0;j<5;++j) {
             if (i!=j) field(s,members[i],defaultConfig.*members[j],configError::gpio,"duplicate GPIO");
         }
         field(s,members[i],std::int32_t{18},configError::none,"valid alternative GPIO");
     }
 }
-// Check baseline, alternative, fractional and response-limit behavior.
+// Comprueba perfiles inicial y alternativo, fracciones y límite de respuesta.
 void profiles(testState& s) {
-    expect(s,validateProfile(defaultConfig).error==configError::none,"default valid");
-    expect(s,validateProfile(defaultConfig).responseBoundMs==1147.0F,"default bound");
+    expect(s,profileValidator{}.validate(defaultConfig).error==configError::none,"default valid");
+    expect(s,profileValidator{}.validate(defaultConfig).responseBoundMs==1147.0F,"default bound");
     systemConfig p{defaultConfig};
     p.motionEnterCmPerSec=5; p.motionExitCmPerSec=3;
-    expect(s,validateProfile(p).error==configError::none,"alternative valid");
+    expect(s,profileValidator{}.validate(p).error==configError::none,"alternative valid");
     p.echoTimeoutUs=25001;
-    expect(s,std::abs(validateProfile(p).responseBoundMs-1147.001)<1e-9,"fraction preserved");
+    expect(s,std::abs(profileValidator{}.validate(p).responseBoundMs-1147.001)<1e-9,"fraction preserved");
     p=defaultConfig; p.samplePeriodMs=200; p.sampleToleranceMs=20; p.analysisLagSamples=8; p.confirmationCount=5;
-    expect(s,validateProfile(p).error==configError::responseBound,"excess bound");
+    expect(s,profileValidator{}.validate(p).error==configError::responseBound,"excess bound");
+    expect(s,profileValidator{}.validate(p).responseBoundMs==3347.0,"excess bound retained");
     p=defaultConfig; p.samplePeriodMs=190; p.sampleToleranceMs=5; p.echoTimeoutUs=28000;
-    expect(s,validateProfile(p).responseBoundMs==2000 && validateProfile(p).error==configError::none,"bound equality");
+    expect(s,profileValidator{}.validate(p).responseBoundMs==2000 && profileValidator{}.validate(p).error==configError::none,"bound equality");
     p.echoTimeoutUs=28001;
-    expect(s,validateProfile(p).error==configError::responseBound,"bound fractional excess");
+    expect(s,profileValidator{}.validate(p).error==configError::responseBound,"bound fractional excess");
+    expect(s,std::abs(profileValidator{}.validate(p).responseBoundMs-2000.001)<1e-9,"fractional excess retained");
     field(s,&systemConfig::samplePeriodMs,std::uint32_t{79},configError::period,"period below");
     field(s,&systemConfig::samplePeriodMs,std::uint32_t{201},configError::period,"period above");
     field(s,&systemConfig::samplePeriodMs,std::numeric_limits<std::uint32_t>::max(),configError::period,"period extreme");
     p=defaultConfig; p.samplePeriodMs=200; p.sampleToleranceMs=20; p.analysisLagSamples=3; p.confirmationCount=2;
-    expect(s,validateProfile(p).error==configError::none,"period upper");
+    expect(s,profileValidator{}.validate(p).error==configError::none,"period upper");
     p=defaultConfig; p.samplePeriodMs=80; p.sampleToleranceMs=8;
-    expect(s,validateProfile(p).error==configError::none,"period lower tolerance boundary");
+    expect(s,profileValidator{}.validate(p).error==configError::none,"period lower tolerance boundary");
     p.sampleToleranceMs=9;
-    expect(s,validateProfile(p).error==configError::tolerance,"period relative tolerance");
+    expect(s,profileValidator{}.validate(p).error==configError::tolerance,"period relative tolerance");
 }
-// Run all families and propagate failure to the host process.
+// Comprueba cada valor inicial contra el contrato independiente.
+void initialValues(testState& s) {
+    expect(s, defaultConfig.samplePeriodMs == 100, "default samplePeriodMs");
+    expect(s, defaultConfig.sampleToleranceMs == 10, "default sampleToleranceMs");
+    expect(s, defaultConfig.echoTimeoutUs == 25000, "default echoTimeoutUs");
+    expect(s, defaultConfig.minDistanceCm == 10.0F, "default minDistanceCm");
+    expect(s, defaultConfig.maxDistanceCm == 200.0F, "default maxDistanceCm");
+    expect(s, defaultConfig.distanceScale == 1.0F, "default distanceScale");
+    expect(s, defaultConfig.distanceOffsetCm == 0.0F, "default distanceOffsetCm");
+    expect(s, defaultConfig.analysisLagSamples == 5, "default analysisLagSamples");
+    expect(s, defaultConfig.motionEnterCmPerSec == 4.0F, "default motionEnterCmPerSec");
+    expect(s, defaultConfig.motionExitCmPerSec == 2.0F, "default motionExitCmPerSec");
+    expect(s, defaultConfig.mediumEnterCmPerSec == 12.0F, "default mediumEnterCmPerSec");
+    expect(s, defaultConfig.mediumExitCmPerSec == 10.0F, "default mediumExitCmPerSec");
+    expect(s, defaultConfig.highEnterCmPerSec == 25.0F, "default highEnterCmPerSec");
+    expect(s, defaultConfig.highExitCmPerSec == 22.0F, "default highExitCmPerSec");
+    expect(s, defaultConfig.confirmationCount == 3, "default confirmationCount");
+    expect(s, defaultConfig.invalidLimit == 3, "default invalidLimit");
+    expect(s, defaultConfig.staleTimeoutMs == 350, "default staleTimeoutMs");
+    expect(s, defaultConfig.lowBlinkHz == 1.0F, "default lowBlinkHz");
+    expect(s, defaultConfig.mediumBlinkHz == 2.0F, "default mediumBlinkHz");
+    expect(s, defaultConfig.highBlinkHz == 4.0F, "default highBlinkHz");
+    expect(s, defaultConfig.statusBlinkHz == 1.0F, "default statusBlinkHz");
+    expect(s, defaultConfig.errorBlinkHz == 2.0F, "default errorBlinkHz");
+    expect(s, defaultConfig.triggerPin == 25, "default triggerPin");
+    expect(s, defaultConfig.echoPin == 26, "default echoPin");
+    expect(s, defaultConfig.stationaryLedPin == 27, "default stationaryLedPin");
+    expect(s, defaultConfig.approachingLedPin == 32, "default approachingLedPin");
+    expect(s, defaultConfig.recedingLedPin == 33, "default recedingLedPin");
+    expect(s, defaultConfig.activeHigh == true, "default activeHigh");
+}
+// Prueba todos los GPIO de salida admitidos sin introducir duplicados.
+void allowedOutputs(testState& s) {
+    std::int32_t systemConfig::*members[]{&systemConfig::triggerPin,&systemConfig::echoPin,
+        &systemConfig::stationaryLedPin,&systemConfig::approachingLedPin,&systemConfig::recedingLedPin};
+    const std::int32_t allowed[]{1,3,4,13,14,16,17,18,19,21,22,23,25,26,27,32,33};
+    for (auto member : members) {
+        for (auto pin : allowed) {
+            systemConfig p{defaultConfig};
+            for (auto other : members) {
+                p.*other = p.*other == pin ? defaultConfig.*member : p.*other;
+            }
+            p.*member = pin;
+            expect(s,profileValidator{}.validate(p).error==configError::none,"allowed GPIO");
+        }
+    }
+}
+// Comprueba fronteras relativas sobre perfiles alternativos.
+void relativeLimits(testState& s) {
+    systemConfig p{defaultConfig};
+    p.maxDistanceCm=100; p.echoTimeoutUs=5800;
+    expect(s,profileValidator{}.validate(p).error==configError::echoTimeout,"alternate echo minimum equality");
+    p.echoTimeoutUs=5799;
+    expect(s,profileValidator{}.validate(p).error==configError::echoTimeout,"alternate echo below minimum");
+    p.echoTimeoutUs=5801;
+    expect(s,profileValidator{}.validate(p).error==configError::none,"alternate echo above minimum");
+    p=defaultConfig; p.samplePeriodMs=80; p.sampleToleranceMs=8; p.echoTimeoutUs=72000;
+    expect(s,profileValidator{}.validate(p).error==configError::echoTimeout,"alternate echo maximum equality");
+    p.echoTimeoutUs=72001;
+    expect(s,profileValidator{}.validate(p).error==configError::echoTimeout,"alternate echo above maximum");
+    p.echoTimeoutUs=71999;
+    expect(s,profileValidator{}.validate(p).error==configError::none,"alternate echo below maximum");
+    p=defaultConfig; p.samplePeriodMs=200; p.sampleToleranceMs=20;
+    p.analysisLagSamples=3; p.confirmationCount=2; p.staleTimeoutMs=111;
+    expect(s,profileValidator{}.validate(p).error==configError::stale,"alternate stale below");
+    p.staleTimeoutMs=220;
+    expect(s,profileValidator{}.validate(p).error==configError::stale,"alternate stale equality");
+    p.staleTimeoutMs=221;
+    expect(s,profileValidator{}.validate(p).error==configError::none,"alternate stale above");
+}
+// Ejecuta todas las familias y comunica los fallos al proceso anfitrión.
 int main() {
     testState state{};
+    initialValues(state); allowedOutputs(state); relativeLimits(state);
     integers(state); floating(state); ordering(state); pins(state); profiles(state);
     std::cout << state.checks << " checks, " << state.failures << " failures\n";
     return state.failures==0 ? 0 : 1;
 }
-
-
-
-

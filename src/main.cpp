@@ -1,18 +1,10 @@
-#include <Arduino.h>
-
-// put function declarations here:
-int myFunction(int, int);
-
+﻿#include <Arduino.h>
+#include "systemConfig.h"
+// Check the central profile before any future hardware initialization.
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+    const validationResult result = validateProfile(defaultConfig);
+    if (result.error != configError::none) return;
 }
+// Leave hardware inactive until the acquisition story is implemented.
+void loop() {}
 
-void loop() {
-  // put your main code here, to run repeatedly:
-}
-
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
-}
